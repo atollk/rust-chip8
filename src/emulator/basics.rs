@@ -7,11 +7,6 @@ pub const STACK_DEPTH: usize = 16;
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub struct Address(pub u16);
 
-impl Address {
-    pub fn incr(&mut self) {
-        self.0 += 1;
-    }
-}
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub struct Register(pub u8);
 

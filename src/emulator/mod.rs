@@ -1,3 +1,4 @@
-mod basics;
-mod program;
-mod vm;
+pub mod basics;
+pub mod program;
+pub mod vm;
+pub mod ascii_display;

@@ -9,12 +9,12 @@ use std::{thread, time::Duration};
 /// Holds the logic of a virtual machine in action, including things like the
 /// program counter and the memory.
 pub struct VirtualMachine {
-    program_counter: Address,
+    pub program_counter: Address,
     stack: Vec<Address>,
     registers: [Value; 16],
     register_i: Address,
     memory: [Value; MEMORY_SIZE],
-    interface: Arc<Mutex<VMInterface>>,
+    pub interface: Arc<Mutex<VMInterface>>,
 }
 
 /// The "Interface" contains those parts of the VM that are used to communicate
@@ -28,31 +28,7 @@ pub struct VMInterface {
 
 impl VirtualMachine {
     /// Creates a new VM instance with all registers and memory set accordingly.
-    pub fn new() -> VirtualMachine {
-        let stack = {
-            let mut stack = Vec::new();
-            stack.reserve(STACK_DEPTH);
-            stack
-        };
-        let memory = {
-            let mut memory = [Value(0); MEMORY_SIZE];
-            let font_sprites = [
-                0xF0, 0x90, 0x90, 0x90, 0xF0, 0x20, 0x60, 0x20, 0x20, 0x70, 0xF0, 0x10, 0xF0, 0x80,
-                0xF0, 0xF0, 0x10, 0xF0, 0x10, 0xF0, 0x90, 0x90, 0xF0, 0x10, 0x10, 0xF0, 0x80, 0xF0,
-                0x10, 0xF0, 0xF0, 0x80, 0xF0, 0x90, 0xF0, 0xF0, 0x10, 0x20, 0x40, 0x40, 0xF0, 0x90,
-                0xF0, 0x90, 0xF0, 0xF0, 0x90, 0xF0, 0x10, 0xF0, 0xF0, 0x90, 0xF0, 0x90, 0x90, 0xE0,
-                0x90, 0xE0, 0x90, 0xE0, 0xF0, 0x80, 0x80, 0x80, 0xF0, 0xE0, 0x90, 0x90, 0x90, 0xE0,
-                0xF0, 0x70, 0xF0, 0x80, 0xF0, 0xF0, 0x80, 0xF0, 0x80, 0x80,
-            ];
-            for (mem_cell, font_byte) in memory
-                .iter_mut()
-                .skip(FONT_OFFSET as usize)
-                .zip(font_sprites.iter())
-            {
-                *mem_cell = Value(*font_byte);
-            }
-            memory
-        };
+    pub fn new(program: &[u8]) -> VirtualMachine {
         let interface = VMInterface {
             delay_timer: Value(0),
             sound_timer: Value(0),
@@ -61,13 +37,50 @@ impl VirtualMachine {
         };
 
         VirtualMachine {
-            program_counter: Address(0),
-            stack: stack,
+            program_counter: Address(0x200),
+            stack: Vec::new(),
             registers: [Value(0); 16],
             register_i: Address(0),
-            memory: memory,
+            memory: VirtualMachine::setup_memory(program),
             interface: Arc::new(Mutex::new(interface)),
         }
+    }
+
+    fn setup_memory(program: &[u8]) -> [Value; MEMORY_SIZE] {
+        let mut memory = [Value(0); MEMORY_SIZE];
+        let font_sprites = [
+            0xF0, 0x90, 0x90, 0x90, 0xF0, 0x20, 0x60, 0x20, 0x20, 0x70, 0xF0, 0x10, 0xF0, 0x80,
+            0xF0, 0xF0, 0x10, 0xF0, 0x10, 0xF0, 0x90, 0x90, 0xF0, 0x10, 0x10, 0xF0, 0x80, 0xF0,
+            0x10, 0xF0, 0xF0, 0x80, 0xF0, 0x90, 0xF0, 0xF0, 0x10, 0x20, 0x40, 0x40, 0xF0, 0x90,
+            0xF0, 0x90, 0xF0, 0xF0, 0x90, 0xF0, 0x10, 0xF0, 0xF0, 0x90, 0xF0, 0x90, 0x90, 0xE0,
+            0x90, 0xE0, 0x90, 0xE0, 0xF0, 0x80, 0x80, 0x80, 0xF0, 0xE0, 0x90, 0x90, 0x90, 0xE0,
+            0xF0, 0x70, 0xF0, 0x80, 0xF0, 0xF0, 0x80, 0xF0, 0x80, 0x80,
+        ];
+        for (mem_cell, font_byte) in memory
+            .iter_mut()
+            .skip(FONT_OFFSET as usize)
+            .zip(font_sprites.iter())
+        {
+            *mem_cell = Value(*font_byte);
+        }
+        for (mem_cell, prog_byte) in memory
+            .iter_mut()
+            .skip(0x200)
+            .zip(program.iter()) {
+                *mem_cell = Value(*prog_byte);
+            }
+        memory
+    }
+
+    /// Executes the next instruction of the VM, according to the program counter.
+    pub fn step(&mut self) {
+        let instruction = {
+            let a = self.memory[self.program_counter.0 as usize].0;
+            let b = self.memory[self.program_counter.0 as usize + 1].0;
+            let instruction_bytes = (a >> 4 & 0x0F, a & 0x0F, b >> 4 & 0x0F, b & 0x0F);
+            Instruction::from_16bit(instruction_bytes)
+        };
+        self.execute_instruction(&instruction);
     }
 
     /// Clears the entire display of a running VM to black.
@@ -126,8 +139,8 @@ impl VirtualMachine {
     /// Executes a single instruction. The program counter is updated,
     /// meaning for most instructions it will increase by 1 and move
     /// arbitrarily for others.
-    fn execute_instruction(&mut self, instruction: &Instruction) {
-        self.program_counter.incr();
+    pub fn execute_instruction(&mut self, instruction: &Instruction) {
+        self.program_counter.0 += 2;
         match instruction {
             // Jumps
             Instruction::CallSubroutine(addr) => self.call_subroutine(&addr),
@@ -141,33 +154,33 @@ impl VirtualMachine {
             // Conditionals
             Instruction::IfNotEqualConst(vx, n) => {
                 if *self.register(vx) == *n {
-                    self.program_counter.incr();
+                    self.program_counter.0 += 2;
                 }
             }
             Instruction::IfEqualConst(vx, n) => {
                 if *self.register(vx) != *n {
-                    self.program_counter.incr();
+                    self.program_counter.0 += 2;
                 }
             }
             Instruction::IfNotEqual(vx, vy) => {
                 let x = *self.register(vx);
                 let y = *self.register(vy);
                 if x == y {
-                    self.program_counter.incr();
+                    self.program_counter.0 += 2;
                 }
             }
             Instruction::IfEqual(vx, vy) => {
                 let x = *self.register(vx);
                 let y = *self.register(vy);
                 if x != y {
-                    self.program_counter.incr();
+                    self.program_counter.0 += 2;
                 }
             }
 
             // Register Arithmetic
             Instruction::SetConst(vx, n) => *self.register(vx) = *n,
             Instruction::AddConst(vx, n) => {
-                let value = Value(self.register(vx).0 + n.0);
+                let value = Value(self.register(vx).0.wrapping_add(n.0));
                 *self.register(vx) = value;
             }
             Instruction::Set(vx, vy) => *self.register(vx) = *self.register(vy),
@@ -220,14 +233,14 @@ impl VirtualMachine {
                 let target_key = self.register(vx).0;
                 let current_key = self.interface.lock().unwrap().key_down;
                 if current_key.is_some() && current_key.unwrap() == target_key {
-                    self.program_counter.incr();
+                    self.program_counter.0 += 2;
                 }
             }
             Instruction::IfKey(vx) => {
                 let target_key = self.register(vx).0;
                 let current_key = self.interface.lock().unwrap().key_down;
                 if current_key.is_none() || current_key.unwrap() != target_key {
-                    self.program_counter.incr();
+                    self.program_counter.0 += 2;
                 }
             }
             Instruction::WaitKey(vx) => {
@@ -322,8 +335,8 @@ mod test {
 
     #[test]
     fn test_vm_new() {
-        let vm = VirtualMachine::new();
-        assert_eq!(vm.program_counter, Address(0));
+        let vm = VirtualMachine::new(&[]);
+        assert_eq!(vm.program_counter, Address(0x200));
         assert!(vm.stack.is_empty());
         for r in vm.registers.iter() {
             assert_eq!(*r, Value(0));
@@ -347,43 +360,44 @@ mod test {
 
     #[test]
     fn test_noop() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::new(&[]);
         let noop = Instruction::Noop;
-        assert_eq!(vm.program_counter, Address(0));
+        assert_eq!(vm.program_counter, Address(0x200));
         vm.execute_instruction(&noop);
-        assert_eq!(vm.program_counter, Address(1));
+        assert_eq!(vm.program_counter, Address(0x202));
         vm.execute_instruction(&noop);
-        assert_eq!(vm.program_counter, Address(2));
+        assert_eq!(vm.program_counter, Address(0x204));
     }
 
     #[test]
     fn test_subroutines() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::new(&[]);
+        vm.program_counter = Address(0);
         assert_eq!(vm.program_counter, Address(0));
         vm.execute_instruction(&Instruction::Noop);
-        assert_eq!(vm.program_counter, Address(1));
+        assert_eq!(vm.program_counter, Address(2));
         assert_eq!(vm.stack.len(), 0);
         vm.execute_instruction(&Instruction::CallSubroutine(Address(123)));
         assert_eq!(vm.program_counter, Address(123));
         assert_eq!(vm.stack.len(), 1);
         vm.execute_instruction(&Instruction::Noop);
-        assert_eq!(vm.program_counter, Address(124));
+        assert_eq!(vm.program_counter, Address(125));
         vm.execute_instruction(&Instruction::CallSubroutine(Address(456)));
         assert_eq!(vm.program_counter, Address(456));
         assert_eq!(vm.stack.len(), 2);
         vm.execute_instruction(&Instruction::ReturnSubroutine);
-        assert_eq!(vm.program_counter, Address(125));
+        assert_eq!(vm.program_counter, Address(127));
         assert_eq!(vm.stack.len(), 1);
         vm.execute_instruction(&Instruction::Noop);
-        assert_eq!(vm.program_counter, Address(126));
+        assert_eq!(vm.program_counter, Address(129));
         vm.execute_instruction(&Instruction::ReturnSubroutine);
-        assert_eq!(vm.program_counter, Address(2));
+        assert_eq!(vm.program_counter, Address(4));
         assert_eq!(vm.stack.len(), 0);
     }
 
     #[test]
     fn test_stack_no_overflow() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::new(&[]);
         let call = Instruction::CallSubroutine(Address(0));
         for _ in 0..STACK_DEPTH {
             vm.execute_instruction(&call);
@@ -393,7 +407,7 @@ mod test {
     #[test]
     #[should_panic]
     fn test_stack_overflow() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::new(&[]);
         let call = Instruction::CallSubroutine(Address(0));
         for _ in 0..STACK_DEPTH {
             vm.execute_instruction(&call);
@@ -404,17 +418,18 @@ mod test {
     #[test]
     #[should_panic]
     fn test_stack_empty() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::new(&[]);
         let call = Instruction::ReturnSubroutine;
         vm.execute_instruction(&call);
     }
 
     #[test]
     fn test_jumps() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::new(&[]);
+        vm.program_counter = Address(0);
         assert_eq!(vm.program_counter, Address(0));
         vm.execute_instruction(&Instruction::Noop);
-        assert_eq!(vm.program_counter, Address(1));
+        assert_eq!(vm.program_counter, Address(2));
         vm.execute_instruction(&Instruction::Jump(Address(42)));
         assert_eq!(vm.program_counter, Address(42));
         assert_eq!(vm.registers[0], Value(0));
@@ -429,7 +444,8 @@ mod test {
 
     #[test]
     fn test_conditionals() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::new(&[]);
+        vm.program_counter = Address(0);
         vm.registers = [
             Value(0),
             Value(1),
@@ -450,30 +466,31 @@ mod test {
         ];
         assert_eq!(vm.program_counter, Address(0));
         vm.execute_instruction(&Instruction::IfEqualConst(Register(0), Value(0)));
-        assert_eq!(vm.program_counter, Address(1));
+        assert_eq!(vm.program_counter, Address(2));
         vm.execute_instruction(&Instruction::IfEqualConst(Register(1), Value(2)));
-        assert_eq!(vm.program_counter, Address(3));
-        vm.execute_instruction(&Instruction::IfNotEqualConst(Register(1), Value(1)));
-        assert_eq!(vm.program_counter, Address(5));
-        vm.execute_instruction(&Instruction::IfNotEqualConst(Register(2), Value(0)));
         assert_eq!(vm.program_counter, Address(6));
-        vm.execute_instruction(&Instruction::IfEqual(Register(4), Register(4)));
-        assert_eq!(vm.program_counter, Address(7));
-        vm.execute_instruction(&Instruction::IfEqual(Register(4), Register(5)));
-        assert_eq!(vm.program_counter, Address(9));
-        vm.execute_instruction(&Instruction::IfEqual(Register(0), Register(15)));
+        vm.execute_instruction(&Instruction::IfNotEqualConst(Register(1), Value(1)));
         assert_eq!(vm.program_counter, Address(10));
-        vm.execute_instruction(&Instruction::IfNotEqual(Register(4), Register(4)));
+        vm.execute_instruction(&Instruction::IfNotEqualConst(Register(2), Value(0)));
         assert_eq!(vm.program_counter, Address(12));
+        vm.execute_instruction(&Instruction::IfEqual(Register(4), Register(4)));
+        assert_eq!(vm.program_counter, Address(14));
+        vm.execute_instruction(&Instruction::IfEqual(Register(4), Register(5)));
+        assert_eq!(vm.program_counter, Address(18));
+        vm.execute_instruction(&Instruction::IfEqual(Register(0), Register(15)));
+        assert_eq!(vm.program_counter, Address(20));
+        vm.execute_instruction(&Instruction::IfNotEqual(Register(4), Register(4)));
+        assert_eq!(vm.program_counter, Address(24));
         vm.execute_instruction(&Instruction::IfNotEqual(Register(4), Register(5)));
-        assert_eq!(vm.program_counter, Address(13));
+        assert_eq!(vm.program_counter, Address(26));
         vm.execute_instruction(&Instruction::IfNotEqual(Register(0), Register(15)));
-        assert_eq!(vm.program_counter, Address(15));
+        assert_eq!(vm.program_counter, Address(30));
     }
 
     #[test]
     fn test_arithmetic() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::new(&[]);
+        vm.program_counter = Address(0);
         vm.registers = [
             Value(0),
             Value(1),
@@ -495,50 +512,51 @@ mod test {
         assert_eq!(vm.program_counter, Address(0));
         assert_eq!(vm.registers[0], Value(0));
         vm.execute_instruction(&Instruction::SetConst(Register(0), Value(5)));
-        assert_eq!(vm.program_counter, Address(1));
+        assert_eq!(vm.program_counter, Address(2));
         assert_eq!(vm.registers[0], Value(5));
         vm.execute_instruction(&Instruction::AddConst(Register(1), Value(2)));
-        assert_eq!(vm.program_counter, Address(2));
+        assert_eq!(vm.program_counter, Address(4));
         assert_eq!(vm.registers[1], Value(3));
         vm.execute_instruction(&Instruction::Set(Register(0), Register(2)));
-        assert_eq!(vm.program_counter, Address(3));
+        assert_eq!(vm.program_counter, Address(6));
         assert_eq!(vm.registers[0], Value(2));
         assert_eq!(vm.registers[2], Value(2));
         vm.execute_instruction(&Instruction::Or(Register(4), Register(1)));
-        assert_eq!(vm.program_counter, Address(4));
+        assert_eq!(vm.program_counter, Address(8));
         assert_eq!(vm.registers[4], Value(7));
         assert_eq!(vm.registers[1], Value(3));
         vm.execute_instruction(&Instruction::And(Register(0), Register(1)));
-        assert_eq!(vm.program_counter, Address(5));
+        assert_eq!(vm.program_counter, Address(10));
         assert_eq!(vm.registers[0], Value(2));
         assert_eq!(vm.registers[1], Value(3));
         vm.execute_instruction(&Instruction::Xor(Register(14), Register(4)));
-        assert_eq!(vm.program_counter, Address(6));
+        assert_eq!(vm.program_counter, Address(12));
         assert_eq!(vm.registers[14], Value(9));
         assert_eq!(vm.registers[4], Value(7));
         vm.execute_instruction(&Instruction::Add(Register(6), Register(7)));
-        assert_eq!(vm.program_counter, Address(7));
+        assert_eq!(vm.program_counter, Address(14));
         assert_eq!(vm.registers[6], Value(13));
         assert_eq!(vm.registers[7], Value(7));
         vm.execute_instruction(&Instruction::Sub(Register(6), Register(5)));
-        assert_eq!(vm.program_counter, Address(8));
+        assert_eq!(vm.program_counter, Address(16));
         assert_eq!(vm.registers[6], Value(8));
         assert_eq!(vm.registers[5], Value(5));
         vm.execute_instruction(&Instruction::NegSub(Register(1), Register(4)));
-        assert_eq!(vm.program_counter, Address(9));
+        assert_eq!(vm.program_counter, Address(18));
         assert_eq!(vm.registers[1], Value(4));
         assert_eq!(vm.registers[4], Value(7));
         vm.execute_instruction(&Instruction::LeftShift(Register(0)));
-        assert_eq!(vm.program_counter, Address(10));
+        assert_eq!(vm.program_counter, Address(20));
         assert_eq!(vm.registers[0], Value(4));
         vm.execute_instruction(&Instruction::RightShift(Register(7)));
-        assert_eq!(vm.program_counter, Address(11));
+        assert_eq!(vm.program_counter, Address(22));
         assert_eq!(vm.registers[7], Value(3));
     }
 
     #[test]
     fn test_arithmetic_overflow() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::new(&[]);
+        vm.program_counter = Address(0);
         vm.registers = [
             Value(100),
             Value(100),
@@ -559,76 +577,77 @@ mod test {
         ];
         assert_eq!(vm.program_counter, Address(0));
         vm.execute_instruction(&Instruction::Add(Register(0), Register(1)));
-        assert_eq!(vm.program_counter, Address(1));
+        assert_eq!(vm.program_counter, Address(2));
         assert_eq!(vm.registers[0], Value(200));
         assert_eq!(vm.registers[15], Value(0));
         vm.execute_instruction(&Instruction::Add(Register(0), Register(1)));
-        assert_eq!(vm.program_counter, Address(2));
+        assert_eq!(vm.program_counter, Address(4));
         assert_eq!(vm.registers[0], Value(44));
         assert_eq!(vm.registers[15], Value(1));
         vm.execute_instruction(&Instruction::Sub(Register(1), Register(2)));
-        assert_eq!(vm.program_counter, Address(3));
+        assert_eq!(vm.program_counter, Address(6));
         assert_eq!(vm.registers[1], Value(40));
         assert_eq!(vm.registers[15], Value(0));
         vm.execute_instruction(&Instruction::Sub(Register(1), Register(2)));
-        assert_eq!(vm.program_counter, Address(4));
+        assert_eq!(vm.program_counter, Address(8));
         assert_eq!(vm.registers[1], Value(236));
         assert_eq!(vm.registers[15], Value(1));
         vm.execute_instruction(&Instruction::NegSub(Register(2), Register(3)));
-        assert_eq!(vm.program_counter, Address(5));
+        assert_eq!(vm.program_counter, Address(10));
         assert_eq!(vm.registers[2], Value(236));
         assert_eq!(vm.registers[15], Value(1));
         vm.execute_instruction(&Instruction::NegSub(Register(3), Register(4)));
-        assert_eq!(vm.program_counter, Address(6));
+        assert_eq!(vm.program_counter, Address(12));
         assert_eq!(vm.registers[3], Value(60));
         assert_eq!(vm.registers[15], Value(0));
         vm.execute_instruction(&Instruction::RightShift(Register(6)));
-        assert_eq!(vm.program_counter, Address(7));
+        assert_eq!(vm.program_counter, Address(14));
         assert_eq!(vm.registers[6], Value(4));
         assert_eq!(vm.registers[15], Value(0));
         vm.execute_instruction(&Instruction::RightShift(Register(7)));
-        assert_eq!(vm.program_counter, Address(8));
+        assert_eq!(vm.program_counter, Address(16));
         assert_eq!(vm.registers[7], Value(4));
         assert_eq!(vm.registers[15], Value(1));
         vm.execute_instruction(&Instruction::LeftShift(Register(9)));
-        assert_eq!(vm.program_counter, Address(9));
+        assert_eq!(vm.program_counter, Address(18));
         assert_eq!(vm.registers[9], Value(130));
         assert_eq!(vm.registers[15], Value(0));
         vm.execute_instruction(&Instruction::LeftShift(Register(10)));
-        assert_eq!(vm.program_counter, Address(10));
+        assert_eq!(vm.program_counter, Address(20));
         assert_eq!(vm.registers[10], Value(2));
         assert_eq!(vm.registers[15], Value(1));
     }
 
     #[test]
     fn test_key_conditionals() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::new(&[]);
+        vm.program_counter = Address(0);
         assert_eq!(vm.interface.lock().unwrap().key_down, None);
         vm.registers[0] = Value(0);
 
         assert_eq!(vm.program_counter, Address(0));
         vm.execute_instruction(&Instruction::IfKey(Register(0)));
-        assert_eq!(vm.program_counter, Address(2));
-        vm.execute_instruction(&Instruction::IfNotKey(Register(0)));
-        assert_eq!(vm.program_counter, Address(3));
-        vm.interface.lock().unwrap().key_down = Some(1);
-        vm.execute_instruction(&Instruction::IfKey(Register(0)));
-        assert_eq!(vm.program_counter, Address(5));
+        assert_eq!(vm.program_counter, Address(4));
         vm.execute_instruction(&Instruction::IfNotKey(Register(0)));
         assert_eq!(vm.program_counter, Address(6));
+        vm.interface.lock().unwrap().key_down = Some(1);
+        vm.execute_instruction(&Instruction::IfKey(Register(0)));
+        assert_eq!(vm.program_counter, Address(10));
+        vm.execute_instruction(&Instruction::IfNotKey(Register(0)));
+        assert_eq!(vm.program_counter, Address(12));
         vm.registers[0] = Value(1);
         vm.execute_instruction(&Instruction::IfKey(Register(0)));
-        assert_eq!(vm.program_counter, Address(7));
+        assert_eq!(vm.program_counter, Address(14));
         vm.execute_instruction(&Instruction::IfNotKey(Register(0)));
-        assert_eq!(vm.program_counter, Address(9));
+        assert_eq!(vm.program_counter, Address(18));
     }
 
     #[test]
     fn test_key_wait() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::new(&[]);
         let interface = vm.interface.clone();
         assert!(vm.interface.lock().unwrap().key_down.is_none());
-        assert_eq!(vm.program_counter, Address(0));
+        assert_eq!(vm.program_counter, Address(0x200));
         let t = thread::spawn(move || {
             thread::sleep(Duration::from_secs(1));
             interface.lock().unwrap().key_down = Some(4);
@@ -642,7 +661,7 @@ mod test {
 
     #[test]
     fn test_graphics_draw_simple() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::new(&[]);
         vm.registers = [
             Value(0),
             Value(1),
@@ -705,7 +724,7 @@ mod test {
 
     #[test]
     fn test_graphics_draw_collision() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::new(&[]);
         assert_eq!(vm.registers[15], Value(0));
         // Sprite 1:
         /*
@@ -766,7 +785,7 @@ mod test {
 
     #[test]
     fn test_graphics_sprite_addr() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::new(&[]);
         vm.register_i = Address(0x200);
         vm.registers[0] = Value(5);
         vm.execute_instruction(&Instruction::SpriteAddr(Register(0)));
@@ -795,24 +814,25 @@ mod test {
 
     #[test]
     fn test_timers() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::new(&[]);
+        vm.program_counter = Address(0);
         vm.registers[0] = Value(42);
         assert_eq!(vm.program_counter, Address(0));
         vm.execute_instruction(&Instruction::SetDelayTimer(Register(0)));
-        assert_eq!(vm.program_counter, Address(1));
+        assert_eq!(vm.program_counter, Address(2));
         assert_eq!(vm.interface.lock().unwrap().delay_timer, Value(42));
         vm.registers[0] = Value(130);
         vm.execute_instruction(&Instruction::SetSoundTimer(Register(0)));
-        assert_eq!(vm.program_counter, Address(2));
+        assert_eq!(vm.program_counter, Address(4));
         assert_eq!(vm.interface.lock().unwrap().sound_timer, Value(130));
         vm.execute_instruction(&Instruction::GetDelayTimer(Register(0)));
-        assert_eq!(vm.program_counter, Address(3));
+        assert_eq!(vm.program_counter, Address(6));
         assert_eq!(vm.registers[0], Value(42));
     }
 
     #[test]
     fn test_i_register() {
-        let mut vm = VirtualMachine::new();
+        let mut vm = VirtualMachine::new(&[]);
         vm.registers = [
             Value(0),
             Value(1),

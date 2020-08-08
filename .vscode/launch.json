@@ -7,35 +7,41 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'rust-chip8'",
+            "name": "Debug executable 'chip8-bin'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=rust-chip8",
-                    "--package=rust-chip8"
+                    "--bin=chip8-bin",
+                    "--package=chip8"
                 ],
                 "filter": {
-                    "name": "rust-chip8",
+                    "name": "chip8-bin",
                     "kind": "bin"
                 }
             },
             "args": [],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "environment": [
+                {
+                    "name": "LD_LIBRARY_PATH",
+                    "value": "/usr/local/lib"
+                }
+            ],
         },
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'rust-chip8'",
+            "name": "Debug unit tests in executable 'chip8'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=rust-chip8",
-                    "--package=rust-chip8"
+                    "--bin=chip8",
+                    "--package=chip8"
                 ],
                 "filter": {
-                    "name": "rust-chip8",
-                    "kind": "bin"
+                    "name": "chip8",
+                    "kind": "lib"
                 }
             },
             "args": [],

@@ -1,5 +1,5 @@
 [package]
-name = "rust-chip8"
+name = "chip8"
 version = "0.1.0"
 authors = ["Andreas Tollkötter <andreas.tollkoetter@rwth-aachen.de>"]
 edition = "2018"
@@ -7,4 +7,14 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+sfml = "0.15.1"
 rand = "0.7.3"
+arrayvec = "0.5.1"
+
+[lib]
+name = "chip8"
+path = "src/lib.rs"
+
+[[bin]]
+name = "chip8-bin"
+path = "src/main.rs"

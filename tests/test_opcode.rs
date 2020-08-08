@@ -1,45 +1,51 @@
 extern crate chip8;
-use chip8::emulator::{basics::{SCREEN_HEIGHT, SCREEN_WIDTH}, vm::VirtualMachine};
-use std::{io::Read, fs::File};
+use chip8::emulator::{
+    basics::{SCREEN_HEIGHT, SCREEN_WIDTH},
+    program::Instruction,
+    vm::VirtualMachine,
+};
+use std::{fs::File, io::Read};
 
 const ROM_FILE: &str = "tests/emulator/test_opcode.ch8";
 
-const EXPECTED_OUTPUT: &str = 
-"@@@ @ @  @@@ @ @      @@@ @@@  @@@ @ @     @@@  @@ @@@ @ @      
- @@  @   @ @ @@       @ @ @@   @ @ @@      @@@  @  @ @ @@       
-  @ @ @  @ @ @ @      @ @ @    @ @ @ @     @ @   @ @ @ @ @      
-@@@ @ @  @@@ @ @      @@@ @@@  @@@ @ @     @@@  @  @@@ @ @      
+const EXPECTED_OUTPUT: &str = "                                                                
+ @@@ @ @  @@@ @ @      @@@ @@@  @@@ @ @     @@@  @@ @@@ @ @     
+  @@  @   @ @ @@       @ @ @@   @ @ @@      @@@  @  @ @ @@      
+   @ @ @  @ @ @ @      @ @ @    @ @ @ @     @ @   @ @ @ @ @     
+ @@@ @ @  @@@ @ @      @@@ @@@  @@@ @ @     @@@  @  @@@ @ @     
                                                                 
-@ @ @ @  @@@ @ @      @@@ @@@  @@@ @ @     @@@ @@@ @@@ @ @      
-@@@  @   @ @ @@       @@@ @ @  @ @ @@      @@@ @   @ @ @@       
-  @ @ @  @ @ @ @      @ @ @ @  @ @ @ @     @ @ @@@ @ @ @ @      
-  @ @ @  @@@ @ @      @@@ @@@  @@@ @ @     @@@ @@@ @@@ @ @      
+ @ @ @ @  @@@ @ @      @@@ @@@  @@@ @ @     @@@ @@@ @@@ @ @     
+ @@@  @   @ @ @@       @@@ @ @  @ @ @@      @@@ @   @ @ @@      
+   @ @ @  @ @ @ @      @ @ @ @  @ @ @ @     @ @ @@@ @ @ @ @     
+   @ @ @  @@@ @ @      @@@ @@@  @@@ @ @     @@@ @@@ @@@ @ @     
                                                                 
- @@ @ @  @@@ @ @      @@@ @@   @@@ @ @     @@@ @@@ @@@ @ @      
- @   @   @ @ @@       @@@  @   @ @ @@      @@@ @@  @ @ @@       
-  @ @ @  @ @ @ @      @ @  @   @ @ @ @     @ @ @   @ @ @ @      
- @  @ @  @@@ @ @      @@@ @@@  @@@ @ @     @@@ @@@ @@@ @ @      
+  @@ @ @  @@@ @ @      @@@ @@   @@@ @ @     @@@ @@@ @@@ @ @     
+  @   @   @ @ @@       @@@  @   @ @ @@      @@@ @@  @ @ @@      
+   @ @ @  @ @ @ @      @ @  @   @ @ @ @     @ @ @   @ @ @ @     
+  @  @ @  @@@ @ @      @@@ @@@  @@@ @ @     @@@ @@@ @@@ @ @     
                                                                 
-@@@ @ @  @@@ @ @      @@@ @@@  @@@ @ @     @@@  @@ @@@ @ @      
-  @  @   @ @ @@       @@@   @  @ @ @@      @    @  @ @ @@       
-  @ @ @  @ @ @ @      @ @ @@   @ @ @ @     @@    @ @ @ @ @      
-  @ @ @  @@@ @ @      @@@ @@@  @@@ @ @     @    @  @@@ @ @      
+ @@@ @ @  @@@ @ @      @@@ @@@  @@@ @ @     @@@  @@ @@@ @ @     
+   @  @   @ @ @@       @@@   @  @ @ @@      @    @  @ @ @@      
+   @ @ @  @ @ @ @      @ @ @@   @ @ @ @     @@    @ @ @ @ @     
+   @ @ @  @@@ @ @      @@@ @@@  @@@ @ @     @    @  @@@ @ @     
                                                                 
-@@@ @ @  @@@ @ @      @@@ @@@  @@@ @ @     @@@ @@@ @@@ @ @      
-@@@  @   @ @ @@       @@@  @@  @ @ @@      @    @@ @ @ @@       
-  @ @ @  @ @ @ @      @ @   @  @ @ @ @     @@    @ @ @ @ @      
-@@@ @ @  @@@ @ @      @@@ @@@  @@@ @ @     @   @@@ @@@ @ @      
+ @@@ @ @  @@@ @ @      @@@ @@@  @@@ @ @     @@@ @@@ @@@ @ @     
+ @@@  @   @ @ @@       @@@  @@  @ @ @@      @    @@ @ @ @@      
+   @ @ @  @ @ @ @      @ @   @  @ @ @ @     @@    @ @ @ @ @     
+ @@@ @ @  @@@ @ @      @@@ @@@  @@@ @ @     @   @@@ @@@ @ @     
                                                                 
- @  @ @  @@@ @ @      @@@ @ @  @@@ @ @     @@  @ @ @@@ @ @      
-@ @  @   @ @ @@       @@@ @@@  @ @ @@       @   @  @ @ @@       
-@@@ @ @  @ @ @ @      @ @   @  @ @ @ @      @  @ @ @ @ @ @      
-@ @ @ @  @@@ @ @      @@@   @  @@@ @ @     @@@ @ @ @@@ @ @      
-                                                                
+  @  @ @  @@@ @ @      @@@ @ @  @@@ @ @     @@  @ @ @@@ @ @     
+ @ @  @   @ @ @@       @@@ @@@  @ @ @@       @   @  @ @ @@      
+ @@@ @ @  @ @ @ @      @ @   @  @ @ @ @      @  @ @ @ @ @ @     
+ @ @ @ @  @@@ @ @      @@@   @  @@@ @ @     @@@ @ @ @@@ @ @     
                                                                 
                                                                 ";
 
 fn expected_display() -> [[bool; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize] {
-    assert_eq!(SCREEN_HEIGHT as usize * SCREEN_WIDTH as usize, EXPECTED_OUTPUT.chars().filter(|c| *c != '\n').count());
+    assert_eq!(
+        SCREEN_HEIGHT as usize * SCREEN_WIDTH as usize,
+        EXPECTED_OUTPUT.chars().filter(|c| *c != '\n').count()
+    );
     let mut result = [[false; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize];
     for (i, row) in EXPECTED_OUTPUT.split("\n").enumerate() {
         for (j, chr) in row.chars().enumerate() {
@@ -48,7 +54,6 @@ fn expected_display() -> [[bool; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize]
     }
     result
 }
-
 
 fn load_rom() -> VirtualMachine {
     let mut file = File::open(ROM_FILE).unwrap();
@@ -62,7 +67,10 @@ fn run_until_loop(vm: &mut VirtualMachine) {
         let pc = vm.program_counter;
         vm.step();
         if vm.program_counter == pc {
-            break;
+            if let Instruction::GetDelayTimer(_) = vm.current_instruction() {
+            } else {
+                break;
+            }
         }
     }
 }

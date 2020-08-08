@@ -63,24 +63,21 @@ impl VirtualMachine {
         {
             *mem_cell = Value(*font_byte);
         }
-        for (mem_cell, prog_byte) in memory
-            .iter_mut()
-            .skip(0x200)
-            .zip(program.iter()) {
-                *mem_cell = Value(*prog_byte);
-            }
+        for (mem_cell, prog_byte) in memory.iter_mut().skip(0x200).zip(program.iter()) {
+            *mem_cell = Value(*prog_byte);
+        }
         memory
+    }
+
+    pub fn current_instruction(&self) -> Instruction {
+        let a = self.memory[self.program_counter.0 as usize].0;
+        let b = self.memory[self.program_counter.0 as usize + 1].0;
+        Instruction::from_16bit(a, b)
     }
 
     /// Executes the next instruction of the VM, according to the program counter.
     pub fn step(&mut self) {
-        let instruction = {
-            let a = self.memory[self.program_counter.0 as usize].0;
-            let b = self.memory[self.program_counter.0 as usize + 1].0;
-            let instruction_bytes = (a >> 4 & 0x0F, a & 0x0F, b >> 4 & 0x0F, b & 0x0F);
-            Instruction::from_16bit(instruction_bytes)
-        };
-        self.execute_instruction(&instruction);
+        self.execute_instruction(&self.current_instruction());
     }
 
     /// Clears the entire display of a running VM to black.
@@ -120,6 +117,21 @@ impl VirtualMachine {
     /// Sets the VF register to a given value.
     fn set_vf(&mut self, value: u8) {
         self.registers[15] = Value(value);
+    }
+
+    fn draw_shape(&mut self, vx: &Register, vy: &Register, n: &Value) {
+        self.set_vf(0);
+        let x0 = self.register(vx).0;
+        let y0 = self.register(vy).0;
+        for y_off in 0..n.0 {
+            let index = self.register_i.0 as usize + y_off as usize;
+            let row = self.memory[index].0;
+            for x_off in 0..8 {
+                if row & (128 >> x_off) > 0 {
+                    self.draw_pixel((x0 + x_off) % SCREEN_WIDTH, (y0 + y_off) % SCREEN_HEIGHT);
+                }
+            }
+        }
     }
 
     /// Draws a pixel at a given coordinate on the display.
@@ -257,23 +269,7 @@ impl VirtualMachine {
             }
 
             // Graphics
-            Instruction::Draw(vx, vy, n) => {
-                self.set_vf(0);
-                let x0 = self.register(vx).0;
-                let y0 = self.register(vy).0;
-                for y_off in 0..=n.0 {
-                    let index = self.register_i.0 as usize + y_off as usize;
-                    let row = self.memory[index].0;
-                    for x_off in 0..8 {
-                        if row & (128 >> x_off) > 0 {
-                            self.draw_pixel(
-                                (x0 + x_off) % SCREEN_WIDTH,
-                                (y0 + y_off) % SCREEN_HEIGHT,
-                            );
-                        }
-                    }
-                }
-            }
+            Instruction::Draw(vx, vy, n) => self.draw_shape(vx, vy, n),
             Instruction::ClearDisplay => self.clear_display(),
             Instruction::SpriteAddr(vx) => {
                 let digit = self.register(vx).0;
@@ -883,8 +879,6 @@ mod test {
         assert_eq!(vm.registers[3], Value(4));
         assert_eq!(vm.registers[4], Value(213));
     }
-
-
 
     #[test]
     fn test_rand() {

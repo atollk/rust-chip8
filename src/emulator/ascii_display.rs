@@ -1,4 +1,7 @@
-use super::{basics::{SCREEN_HEIGHT, SCREEN_WIDTH}, vm::VirtualMachine};
+use super::{
+    basics::{SCREEN_HEIGHT, SCREEN_WIDTH},
+    vm::VirtualMachine,
+};
 
 pub fn draw_vm_display(vm: &VirtualMachine) {
     let display = &vm.interface.lock().unwrap().display;

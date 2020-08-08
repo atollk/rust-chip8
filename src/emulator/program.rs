@@ -39,7 +39,6 @@ pub enum Instruction {
     LoadRegisters(Register),
 }
 
-
 macro_rules! NNN {
     ($x:expr) => {
         Address(($x.1 as u16) * 256 + ($x.2 as u16) * 16 + ($x.3 as u16))
@@ -71,7 +70,8 @@ macro_rules! Y {
 }
 
 impl Instruction {
-    pub fn from_16bit(bytes: (u8, u8, u8, u8)) -> Instruction {
+    pub fn from_16bit(a: u8, b: u8) -> Instruction {
+        let bytes = (a >> 4 & 0x0F, a & 0x0F, b >> 4 & 0x0F, b & 0x0F);
         match bytes {
             (0, 0, 0, 0) => Instruction::Noop,
             (0, 0, 14, 0) => Instruction::ClearDisplay,
@@ -109,7 +109,7 @@ impl Instruction {
             (15, _, 3, 3) => Instruction::Decimal(X!(bytes)),
             (15, _, 5, 5) => Instruction::StoreRegisters(X!(bytes)),
             (15, _, 6, 5) => Instruction::LoadRegisters(X!(bytes)),
-            _ => panic!("Invalid rawop: {:?}", bytes)
+            _ => panic!("Invalid rawop: {:?}", bytes),
         }
     }
 }

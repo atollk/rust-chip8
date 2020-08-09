@@ -4,7 +4,6 @@ use super::basics::{
 use super::program::Instruction;
 use rand::Rng;
 use std::sync::{Arc, Mutex};
-use std::thread;
 
 /// Holds the logic of a virtual machine in action, including things like the
 /// program counter and the memory.
@@ -31,7 +30,7 @@ pub struct VMInterface {
 pub trait Display: Send {
     fn clear(&mut self);
     fn draw_pixels(&mut self, pixels: &[(u8, u8)]);
-    fn get(&self, x: u8, y: u8) -> &bool;
+    fn get(&self, x: u8, y: u8) -> u8;
     fn frame(&mut self);
 }
 
@@ -55,8 +54,12 @@ impl Display for SimpleDisplay {
         }
     }
 
-    fn get(&self, x: u8, y: u8) -> &bool {
-        &self.display[x as usize][y as usize]
+    fn get(&self, x: u8, y: u8) -> u8 {
+        if self.display[x as usize][y as usize] {
+            255
+        } else {
+            0
+        }
     }
 
     fn frame(&mut self) {}

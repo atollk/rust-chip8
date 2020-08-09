@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-const INSTRUCTION_SLEEP: Duration = Duration::from_millis(2);
+const INSTRUCTION_SLEEP: Duration = Duration::from_millis(1);
 const TIMER_INTERVAL: Duration = Duration::from_micros(16667);
 
 pub fn run_concurrent_vm_until(mut vm: VirtualMachine, stopper: Arc<Mutex<bool>>) {

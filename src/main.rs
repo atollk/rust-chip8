@@ -16,7 +16,7 @@ fn load_rom(filename: &str) -> VirtualMachine {
     VirtualMachine::new(&raw_rom)
 }
 
-const ROM_FILE: &str = "PONG.ch8";
+const ROM_FILE: &str = "roms/CONNECT4";
 
 fn main() {
     let mut vm = load_rom(ROM_FILE);

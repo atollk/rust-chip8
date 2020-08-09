@@ -100,7 +100,7 @@ impl Visualizer {
         let setup_done = Arc::new((Mutex::new(false), Condvar::new()));
         let setup_done2 = setup_done.clone();
         let join_handle = std::thread::spawn(move || {
-            vm_interface.lock().unwrap().display = Box::new(BufferedDisplay::new());
+            vm_interface.lock().unwrap().display = Box::new(FadeDisplay::new(10));
             let mut internals = VisualizerInternals::new(&*vm_interface);
             {
                 let (mutex, condvar) = &*setup_done2;
@@ -128,48 +128,60 @@ impl Visualizer {
     }
 }
 
-struct BufferedDisplay {
+struct FadeDisplay {
+    fade_duration: u32,
+    display: [[u32; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize],
     true_display: [[bool; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize],
-    buffered_display: [[bool; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize],
 }
 
-impl BufferedDisplay {
-    pub fn new() -> BufferedDisplay {
-        BufferedDisplay {
+impl FadeDisplay {
+    pub fn new(fade_duration: u32) -> FadeDisplay {
+        FadeDisplay {
+            fade_duration,
+            display: [[0; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize],
             true_display: [[false; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize],
-            buffered_display: [[false; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize],
         }
     }
 }
 
-impl Display for BufferedDisplay {
+impl Display for FadeDisplay {
     fn clear(&mut self) {
         for column in self.true_display.iter_mut() {
             for pixel in column.iter_mut() {
                 *pixel = false;
             }
         }
-        for column in self.buffered_display.iter_mut() {
+        for column in self.display.iter_mut() {
             for pixel in column.iter_mut() {
-                *pixel = false;
+                *pixel = 0;
             }
         }
     }
 
     fn draw_pixels(&mut self, pixels: &[(u8, u8)]) {
         for (x, y) in pixels {
-            self.buffered_display[*x as usize][*y as usize] = true;
             let true_pixel = &mut self.true_display[*x as usize][*y as usize];
-            *true_pixel = !*true_pixel;
+            if *true_pixel {
+                *true_pixel = false;
+            } else {
+                *true_pixel = true;
+                self.display[*x as usize][*y as usize] = self.fade_duration;
+            }
         }
     }
 
-    fn get(&self, x: u8, y: u8) -> &bool {
-        &self.buffered_display[x as usize][y as usize]
+    fn get(&self, x: u8, y: u8) -> u8 {
+        (self.display[x as usize][y as usize] * 255 / self.fade_duration) as u8
     }
 
     fn frame(&mut self) {
-        self.buffered_display = self.true_display;
+        for x in 0..SCREEN_WIDTH as usize {
+            for y in 0..SCREEN_HEIGHT as usize {
+                if !self.true_display[x][y] && self.display[x][y] > 0 {
+                    self.display[x][y] -= 1;
+                }
+            }
+        }
     }
 }
 
@@ -218,11 +230,12 @@ fn run(internals: &mut VisualizerInternals) {
         internals.window.clear(Color::BLACK);
         for x in 0..SCREEN_WIDTH {
             for y in 0..SCREEN_HEIGHT {
-                if *internals.vm_interface.lock().unwrap().display.get(x, y) {
+                let pixel = &mut internals.pixels[x as usize][y as usize];
+                let alpha = internals.vm_interface.lock().unwrap().display.get(x, y);
+                pixel.set_fill_color(Color::rgba(255, 255, 255, alpha));
                     internals
                         .window
-                        .draw(&internals.pixels[x as usize][y as usize]);
-                }
+                        .draw(pixel);
             }
         }
         internals.vm_interface.lock().unwrap().display.frame();

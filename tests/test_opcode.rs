@@ -79,11 +79,16 @@ fn run_until_loop(vm: &mut VirtualMachine) {
 fn test_opcode8() {
     let mut vm = load_rom();
     run_until_loop(&mut vm);
-    let display = vm.interface.lock().unwrap().display;
+    let display = &vm.interface.lock().unwrap().display;
     let expected = expected_display();
     for x in 0..SCREEN_WIDTH as usize {
         for y in 0..SCREEN_HEIGHT as usize {
-            assert_eq!(display[x][y], expected[x][y], "mismatch at {:?}", (x, y));
+            assert_eq!(
+                *display.get(x as u8, y as u8),
+                expected[x][y],
+                "mismatch at {:?}",
+                (x, y)
+            );
         }
     }
 }

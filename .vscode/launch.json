@@ -36,8 +36,10 @@
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=chip8",
-                    "--package=chip8"
+                    "--lib=chip8",
+                    "--package=chip8",
+                    "--",
+                    "--test-threads=1"
                 ],
                 "filter": {
                     "name": "chip8",

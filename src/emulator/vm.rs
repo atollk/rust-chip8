@@ -4,7 +4,7 @@ use super::basics::{
 use super::program::Instruction;
 use rand::Rng;
 use std::sync::{Arc, Mutex};
-use std::{thread, time::Duration};
+use std::thread;
 
 /// Holds the logic of a virtual machine in action, including things like the
 /// program counter and the memory.
@@ -14,6 +14,7 @@ pub struct VirtualMachine {
     registers: [Value; 16],
     register_i: Address,
     memory: [Value; MEMORY_SIZE],
+    logical_display: [[bool; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize],
     pub interface: Arc<Mutex<VMInterface>>,
 }
 
@@ -23,7 +24,42 @@ pub struct VMInterface {
     pub delay_timer: Value,
     pub sound_timer: Value,
     pub key_down: Option<u8>,
-    pub display: [[bool; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize],
+    pub display: Box<dyn Display>,
+}
+
+/// A "display", which is called whenever a drawing instruction is executed.
+pub trait Display: Send {
+    fn clear(&mut self);
+    fn draw_pixels(&mut self, pixels: &[(u8, u8)]);
+    fn get(&self, x: u8, y: u8) -> &bool;
+    fn frame(&mut self);
+}
+
+struct SimpleDisplay {
+    display: [[bool; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize],
+}
+
+impl Display for SimpleDisplay {
+    fn clear(&mut self) {
+        for column in self.display.iter_mut() {
+            for pixel in column.iter_mut() {
+                *pixel = false;
+            }
+        }
+    }
+
+    fn draw_pixels(&mut self, pixels: &[(u8, u8)]) {
+        for (x, y) in pixels {
+            let pixel = &mut self.display[*x as usize][*y as usize];
+            *pixel = !*pixel;
+        }
+    }
+
+    fn get(&self, x: u8, y: u8) -> &bool {
+        &self.display[x as usize][y as usize]
+    }
+
+    fn frame(&mut self) {}
 }
 
 impl VirtualMachine {
@@ -33,7 +69,9 @@ impl VirtualMachine {
             delay_timer: Value(0),
             sound_timer: Value(0),
             key_down: None,
-            display: [[false; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize],
+            display: Box::new(SimpleDisplay {
+                display: [[false; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize],
+            }),
         };
 
         VirtualMachine {
@@ -42,6 +80,7 @@ impl VirtualMachine {
             registers: [Value(0); 16],
             register_i: Address(0),
             memory: VirtualMachine::setup_memory(program),
+            logical_display: [[false; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize],
             interface: Arc::new(Mutex::new(interface)),
         }
     }
@@ -82,12 +121,12 @@ impl VirtualMachine {
 
     /// Clears the entire display of a running VM to black.
     fn clear_display(&mut self) {
-        let mut interface = self.interface.lock().unwrap();
         for x in 0..SCREEN_WIDTH as usize {
             for y in 0..SCREEN_HEIGHT as usize {
-                interface.display[x][y] = false;
+                self.logical_display[x][y] = false;
             }
         }
+        self.interface.lock().unwrap().display.clear();
     }
 
     /// Returns the control flow from a subroutine.
@@ -121,6 +160,7 @@ impl VirtualMachine {
 
     fn draw_shape(&mut self, vx: &Register, vy: &Register, n: &Value) {
         self.set_vf(0);
+        let mut pixels = Vec::new();
         let x0 = self.register(vx).0;
         let y0 = self.register(vy).0;
         for y_off in 0..n.0 {
@@ -128,10 +168,20 @@ impl VirtualMachine {
             let row = self.memory[index].0;
             for x_off in 0..8 {
                 if row & (128 >> x_off) > 0 {
-                    self.draw_pixel((x0 + x_off) % SCREEN_WIDTH, (y0 + y_off) % SCREEN_HEIGHT);
+                    let x = (x0 + x_off) % SCREEN_WIDTH;
+                    let y = (y0 + y_off) % SCREEN_HEIGHT;
+                    pixels.push((x, y));
                 }
             }
         }
+        self.draw_pixels(&pixels);
+    }
+
+    fn draw_pixels(&mut self, pixels: &[(u8, u8)]) {
+        for (x, y) in pixels {
+            self.draw_pixel(*x, *y);
+        }
+        self.interface.lock().unwrap().display.draw_pixels(pixels);
     }
 
     /// Draws a pixel at a given coordinate on the display.
@@ -139,7 +189,7 @@ impl VirtualMachine {
     /// set to 1.
     fn draw_pixel(&mut self, x: u8, y: u8) {
         let was_cleared = {
-            let pixel = &mut self.interface.lock().unwrap().display[x as usize][y as usize];
+            let pixel = &mut self.logical_display[x as usize][y as usize];
             *pixel = !*pixel;
             !*pixel
         };
@@ -220,13 +270,13 @@ impl VirtualMachine {
             Instruction::Sub(vx, vy) => {
                 let value_vx = *self.register(vx);
                 let value_vy = *self.register(vy);
-                self.set_vf((value_vx.0 < value_vy.0) as u8);
+                self.set_vf((value_vx.0 > value_vy.0) as u8);
                 *self.register(&vx) = Value(value_vx.0.wrapping_sub(value_vy.0));
             }
             Instruction::NegSub(vx, vy) => {
                 let value_vx = *self.register(vx);
                 let value_vy = *self.register(vy);
-                self.set_vf((value_vy.0 < value_vx.0) as u8);
+                self.set_vf((value_vy.0 > value_vx.0) as u8);
                 *self.register(&vx) = Value(value_vy.0.wrapping_sub(value_vx.0));
             }
             Instruction::RightShift(vx) => {
@@ -256,16 +306,12 @@ impl VirtualMachine {
                 }
             }
             Instruction::WaitKey(vx) => {
-                let found_key;
-                loop {
-                    if let Some(k) = self.interface.lock().unwrap().key_down {
-                        found_key = Value(k);
-                        break;
-                    } else {
-                        thread::sleep(Duration::from_millis(1));
-                    }
+                let key_down = self.interface.lock().unwrap().key_down;
+                if let Some(k) = key_down {
+                    *self.register(vx) = Value(k);
+                } else {
+                    self.program_counter.0 -= 2;
                 }
-                *self.register(vx) = found_key;
             }
 
             // Graphics
@@ -349,7 +395,7 @@ mod test {
         assert_eq!(vm.interface.lock().unwrap().key_down, None);
         for x in 0..SCREEN_WIDTH as usize {
             for y in 0..SCREEN_HEIGHT as usize {
-                assert!(!vm.interface.lock().unwrap().display[x][y]);
+                assert!(!vm.logical_display[x][y]);
             }
         }
     }
@@ -583,19 +629,19 @@ mod test {
         vm.execute_instruction(&Instruction::Sub(Register(1), Register(2)));
         assert_eq!(vm.program_counter, Address(6));
         assert_eq!(vm.registers[1], Value(40));
-        assert_eq!(vm.registers[15], Value(0));
+        assert_eq!(vm.registers[15], Value(1));
         vm.execute_instruction(&Instruction::Sub(Register(1), Register(2)));
         assert_eq!(vm.program_counter, Address(8));
         assert_eq!(vm.registers[1], Value(236));
-        assert_eq!(vm.registers[15], Value(1));
+        assert_eq!(vm.registers[15], Value(0));
         vm.execute_instruction(&Instruction::NegSub(Register(2), Register(3)));
         assert_eq!(vm.program_counter, Address(10));
         assert_eq!(vm.registers[2], Value(236));
-        assert_eq!(vm.registers[15], Value(1));
+        assert_eq!(vm.registers[15], Value(0));
         vm.execute_instruction(&Instruction::NegSub(Register(3), Register(4)));
         assert_eq!(vm.program_counter, Address(12));
         assert_eq!(vm.registers[3], Value(60));
-        assert_eq!(vm.registers[15], Value(0));
+        assert_eq!(vm.registers[15], Value(1));
         vm.execute_instruction(&Instruction::RightShift(Register(6)));
         assert_eq!(vm.program_counter, Address(14));
         assert_eq!(vm.registers[6], Value(4));
@@ -644,14 +690,11 @@ mod test {
         let interface = vm.interface.clone();
         assert!(vm.interface.lock().unwrap().key_down.is_none());
         assert_eq!(vm.program_counter, Address(0x200));
-        let t = thread::spawn(move || {
-            thread::sleep(Duration::from_secs(1));
-            interface.lock().unwrap().key_down = Some(4);
-        });
-        let start = Instant::now();
         vm.execute_instruction(&Instruction::WaitKey(Register(0)));
-        t.join().unwrap();
-        assert!(start.elapsed().as_millis() >= 1000);
+        assert_eq!(vm.program_counter, Address(0x200));
+        vm.interface.lock().unwrap().key_down = Some(4);
+        vm.execute_instruction(&Instruction::WaitKey(Register(0)));
+        assert_eq!(vm.program_counter, Address(0x202));
         assert_eq!(vm.registers[0], Value(4));
     }
 
@@ -678,43 +721,43 @@ mod test {
         ];
         vm.register_i = Address(0x200);
 
-        assert!(!vm.interface.lock().unwrap().display[0][0]);
+        assert!(!vm.logical_display[0][0]);
         vm.draw_pixel(0, 0);
-        assert!(vm.interface.lock().unwrap().display[0][0]);
+        assert!(vm.logical_display[0][0]);
 
         vm.execute_instruction(&Instruction::Draw(Register(0), Register(1), Value(1)));
-        assert!(!vm.interface.lock().unwrap().display[0][1]);
-        assert!(!vm.interface.lock().unwrap().display[1][1]);
-        assert!(!vm.interface.lock().unwrap().display[2][1]);
-        assert!(!vm.interface.lock().unwrap().display[3][1]);
-        assert!(!vm.interface.lock().unwrap().display[4][1]);
-        assert!(!vm.interface.lock().unwrap().display[5][1]);
-        assert!(!vm.interface.lock().unwrap().display[6][1]);
-        assert!(!vm.interface.lock().unwrap().display[7][1]);
+        assert!(!vm.logical_display[0][1]);
+        assert!(!vm.logical_display[1][1]);
+        assert!(!vm.logical_display[2][1]);
+        assert!(!vm.logical_display[3][1]);
+        assert!(!vm.logical_display[4][1]);
+        assert!(!vm.logical_display[5][1]);
+        assert!(!vm.logical_display[6][1]);
+        assert!(!vm.logical_display[7][1]);
         assert_eq!(vm.registers[15], Value(0));
 
         vm.memory[vm.register_i.0 as usize] = Value(0b01010101);
         vm.execute_instruction(&Instruction::Draw(Register(0), Register(1), Value(1)));
-        assert!(!vm.interface.lock().unwrap().display[0][1]);
-        assert!(vm.interface.lock().unwrap().display[1][1]);
-        assert!(!vm.interface.lock().unwrap().display[2][1]);
-        assert!(vm.interface.lock().unwrap().display[3][1]);
-        assert!(!vm.interface.lock().unwrap().display[4][1]);
-        assert!(vm.interface.lock().unwrap().display[5][1]);
-        assert!(!vm.interface.lock().unwrap().display[6][1]);
-        assert!(vm.interface.lock().unwrap().display[7][1]);
+        assert!(!vm.logical_display[0][1]);
+        assert!(vm.logical_display[1][1]);
+        assert!(!vm.logical_display[2][1]);
+        assert!(vm.logical_display[3][1]);
+        assert!(!vm.logical_display[4][1]);
+        assert!(vm.logical_display[5][1]);
+        assert!(!vm.logical_display[6][1]);
+        assert!(vm.logical_display[7][1]);
         assert_eq!(vm.registers[15], Value(0));
 
         vm.execute_instruction(&Instruction::ClearDisplay);
-        assert!(!vm.interface.lock().unwrap().display[0][0]);
-        assert!(!vm.interface.lock().unwrap().display[0][1]);
-        assert!(!vm.interface.lock().unwrap().display[1][1]);
-        assert!(!vm.interface.lock().unwrap().display[2][1]);
-        assert!(!vm.interface.lock().unwrap().display[3][1]);
-        assert!(!vm.interface.lock().unwrap().display[4][1]);
-        assert!(!vm.interface.lock().unwrap().display[5][1]);
-        assert!(!vm.interface.lock().unwrap().display[6][1]);
-        assert!(!vm.interface.lock().unwrap().display[7][1]);
+        assert!(!vm.logical_display[0][0]);
+        assert!(!vm.logical_display[0][1]);
+        assert!(!vm.logical_display[1][1]);
+        assert!(!vm.logical_display[2][1]);
+        assert!(!vm.logical_display[3][1]);
+        assert!(!vm.logical_display[4][1]);
+        assert!(!vm.logical_display[5][1]);
+        assert!(!vm.logical_display[6][1]);
+        assert!(!vm.logical_display[7][1]);
         assert_eq!(vm.registers[15], Value(0));
     }
 
@@ -757,26 +800,26 @@ mod test {
         00100
         10101
         */
-        assert!(!vm.interface.lock().unwrap().display[0][0]);
-        assert!(vm.interface.lock().unwrap().display[1][0]);
-        assert!(!vm.interface.lock().unwrap().display[2][0]);
-        assert!(vm.interface.lock().unwrap().display[3][0]);
-        assert!(!vm.interface.lock().unwrap().display[4][0]);
-        assert!(vm.interface.lock().unwrap().display[0][1]);
-        assert!(vm.interface.lock().unwrap().display[1][1]);
-        assert!(!vm.interface.lock().unwrap().display[2][1]);
-        assert!(vm.interface.lock().unwrap().display[3][1]);
-        assert!(vm.interface.lock().unwrap().display[4][1]);
-        assert!(!vm.interface.lock().unwrap().display[0][2]);
-        assert!(!vm.interface.lock().unwrap().display[1][2]);
-        assert!(vm.interface.lock().unwrap().display[2][2]);
-        assert!(!vm.interface.lock().unwrap().display[3][2]);
-        assert!(!vm.interface.lock().unwrap().display[4][2]);
-        assert!(vm.interface.lock().unwrap().display[0][3]);
-        assert!(!vm.interface.lock().unwrap().display[1][3]);
-        assert!(vm.interface.lock().unwrap().display[2][3]);
-        assert!(!vm.interface.lock().unwrap().display[3][3]);
-        assert!(vm.interface.lock().unwrap().display[4][3]);
+        assert!(!vm.logical_display[0][0]);
+        assert!(vm.logical_display[1][0]);
+        assert!(!vm.logical_display[2][0]);
+        assert!(vm.logical_display[3][0]);
+        assert!(!vm.logical_display[4][0]);
+        assert!(vm.logical_display[0][1]);
+        assert!(vm.logical_display[1][1]);
+        assert!(!vm.logical_display[2][1]);
+        assert!(vm.logical_display[3][1]);
+        assert!(vm.logical_display[4][1]);
+        assert!(!vm.logical_display[0][2]);
+        assert!(!vm.logical_display[1][2]);
+        assert!(vm.logical_display[2][2]);
+        assert!(!vm.logical_display[3][2]);
+        assert!(!vm.logical_display[4][2]);
+        assert!(vm.logical_display[0][3]);
+        assert!(!vm.logical_display[1][3]);
+        assert!(vm.logical_display[2][3]);
+        assert!(!vm.logical_display[3][3]);
+        assert!(vm.logical_display[4][3]);
     }
 
     #[test]
@@ -786,26 +829,26 @@ mod test {
         vm.registers[0] = Value(5);
         vm.execute_instruction(&Instruction::SpriteAddr(Register(0)));
         vm.execute_instruction(&Instruction::Draw(Register(1), Register(1), Value(5)));
-        assert!(vm.interface.lock().unwrap().display[0][0]);
-        assert!(vm.interface.lock().unwrap().display[1][0]);
-        assert!(vm.interface.lock().unwrap().display[2][0]);
-        assert!(vm.interface.lock().unwrap().display[3][0]);
-        assert!(vm.interface.lock().unwrap().display[0][1]);
-        assert!(!vm.interface.lock().unwrap().display[1][1]);
-        assert!(!vm.interface.lock().unwrap().display[2][1]);
-        assert!(!vm.interface.lock().unwrap().display[3][1]);
-        assert!(vm.interface.lock().unwrap().display[0][2]);
-        assert!(vm.interface.lock().unwrap().display[1][2]);
-        assert!(vm.interface.lock().unwrap().display[2][2]);
-        assert!(vm.interface.lock().unwrap().display[3][2]);
-        assert!(!vm.interface.lock().unwrap().display[0][3]);
-        assert!(!vm.interface.lock().unwrap().display[1][3]);
-        assert!(!vm.interface.lock().unwrap().display[2][3]);
-        assert!(vm.interface.lock().unwrap().display[3][3]);
-        assert!(vm.interface.lock().unwrap().display[0][4]);
-        assert!(vm.interface.lock().unwrap().display[1][4]);
-        assert!(vm.interface.lock().unwrap().display[2][4]);
-        assert!(vm.interface.lock().unwrap().display[3][4]);
+        assert!(vm.logical_display[0][0]);
+        assert!(vm.logical_display[1][0]);
+        assert!(vm.logical_display[2][0]);
+        assert!(vm.logical_display[3][0]);
+        assert!(vm.logical_display[0][1]);
+        assert!(!vm.logical_display[1][1]);
+        assert!(!vm.logical_display[2][1]);
+        assert!(!vm.logical_display[3][1]);
+        assert!(vm.logical_display[0][2]);
+        assert!(vm.logical_display[1][2]);
+        assert!(vm.logical_display[2][2]);
+        assert!(vm.logical_display[3][2]);
+        assert!(!vm.logical_display[0][3]);
+        assert!(!vm.logical_display[1][3]);
+        assert!(!vm.logical_display[2][3]);
+        assert!(vm.logical_display[3][3]);
+        assert!(vm.logical_display[0][4]);
+        assert!(vm.logical_display[1][4]);
+        assert!(vm.logical_display[2][4]);
+        assert!(vm.logical_display[3][4]);
     }
 
     #[test]

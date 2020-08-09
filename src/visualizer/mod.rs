@@ -3,8 +3,9 @@ extern crate sfml;
 use super::emulator::vm::VMInterface;
 use crate::emulator::basics::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::emulator::vm::Display;
+use sfml::audio::{Sound, SoundBuffer, SoundSource};
 use sfml::graphics::{Color, RectangleShape, RenderTarget, RenderWindow, Shape, Transformable};
-use sfml::system::Vector2f;
+use sfml::system::{SfBox, Vector2f};
 use sfml::window::{ContextSettings, Event, Style, VideoMode};
 use std::iter;
 use std::{
@@ -17,24 +18,81 @@ const KEYS: [sfml::window::Key; 16] = [
     sfml::window::Key::Num1,
     sfml::window::Key::Num2,
     sfml::window::Key::Num3,
-    sfml::window::Key::Num4,
     sfml::window::Key::Q,
     sfml::window::Key::W,
     sfml::window::Key::E,
-    sfml::window::Key::R,
     sfml::window::Key::A,
     sfml::window::Key::S,
     sfml::window::Key::D,
-    sfml::window::Key::F,
-    sfml::window::Key::Y,
     sfml::window::Key::X,
+    sfml::window::Key::Y,
     sfml::window::Key::C,
+    sfml::window::Key::Num4,
+    sfml::window::Key::R,
+    sfml::window::Key::F,
     sfml::window::Key::V,
 ];
+const SOUND_FILENAME: &str = "final-fantasy-viii-sound-effects-cursor-move.ogg";
 
 pub struct Visualizer {
     setup_done: Arc<(Mutex<bool>, Condvar)>,
     join_handle: JoinHandle<()>,
+}
+
+struct VisualizerInternals<'a> {
+    window: RenderWindow,
+    pixels: [[RectangleShape<'a>; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize],
+    vm_interface: &'a Mutex<VMInterface>,
+    sound_buffer: SfBox<SoundBuffer>,
+}
+
+impl<'a> VisualizerInternals<'a> {
+    fn new(vm_interface: &'a Mutex<VMInterface>) -> VisualizerInternals<'a> {
+        VisualizerInternals {
+            window: VisualizerInternals::init_window(),
+            pixels: VisualizerInternals::init_pixels(),
+            vm_interface,
+            sound_buffer: SoundBuffer::from_file(SOUND_FILENAME).unwrap(),
+        }
+    }
+
+    fn init_window() -> RenderWindow {
+        let video_mode = VideoMode::new(
+            SCREEN_WIDTH as u32 * SCALE as u32,
+            SCREEN_HEIGHT as u32 * SCALE as u32,
+            32,
+        );
+        let mut window = RenderWindow::new(
+            video_mode,
+            "Chip 8 Emulator",
+            Style::CLOSE,
+            &ContextSettings::default(),
+        );
+        window.set_framerate_limit(60);
+        window
+    }
+
+    fn init_pixels() -> [[RectangleShape<'static>; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize] {
+        let mut pixels: [[RectangleShape; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize] =
+            iter::repeat(
+                iter::repeat(RectangleShape::new())
+                    .collect::<arrayvec::ArrayVec<_>>()
+                    .into_inner()
+                    .unwrap(),
+            )
+            .collect::<arrayvec::ArrayVec<_>>()
+            .into_inner()
+            .unwrap();
+        for x in 0..SCREEN_WIDTH as usize {
+            for y in 0..SCREEN_HEIGHT as usize {
+                let pixel = &mut pixels[x][y];
+                pixel.set_size(Vector2f::new(SCALE as f32, SCALE as f32));
+                pixel.set_position(Vector2f::new((SCALE * x) as f32, (SCALE * y) as f32));
+                pixel.set_fill_color(Color::WHITE);
+            }
+        }
+        pixels
+    }
 }
 
 impl Visualizer {
@@ -43,14 +101,13 @@ impl Visualizer {
         let setup_done2 = setup_done.clone();
         let join_handle = std::thread::spawn(move || {
             vm_interface.lock().unwrap().display = Box::new(BufferedDisplay::new());
-            let mut window = init_window();
-            let pixels = init_pixels();
+            let mut internals = VisualizerInternals::new(&*vm_interface);
             {
                 let (mutex, condvar) = &*setup_done2;
                 *mutex.lock().unwrap() = true;
                 condvar.notify_all();
             }
-            run(&mut window, &pixels, vm_interface);
+            run(&mut internals);
         });
         Visualizer {
             setup_done,
@@ -116,55 +173,17 @@ impl Display for BufferedDisplay {
     }
 }
 
-fn init_window() -> RenderWindow {
-    let video_mode = VideoMode::new(
-        SCREEN_WIDTH as u32 * SCALE as u32,
-        SCREEN_HEIGHT as u32 * SCALE as u32,
-        32,
-    );
-    let mut window = RenderWindow::new(
-        video_mode,
-        "Chip 8 Emulator",
-        Style::CLOSE,
-        &ContextSettings::default(),
-    );
-    window.set_framerate_limit(60);
-    window
-}
-
-fn init_pixels() -> [[RectangleShape<'static>; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize] {
-    let mut pixels: [[RectangleShape; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize] =
-        iter::repeat(
-            iter::repeat(RectangleShape::new())
-                .collect::<arrayvec::ArrayVec<_>>()
-                .into_inner()
-                .unwrap(),
-        )
-        .collect::<arrayvec::ArrayVec<_>>()
-        .into_inner()
-        .unwrap();
-    for x in 0..SCREEN_WIDTH as usize {
-        for y in 0..SCREEN_HEIGHT as usize {
-            let pixel = &mut pixels[x][y];
-            pixel.set_size(Vector2f::new(SCALE as f32, SCALE as f32));
-            pixel.set_position(Vector2f::new((SCALE * x) as f32, (SCALE * y) as f32));
-            pixel.set_fill_color(Color::WHITE);
-        }
-    }
-    pixels
-}
-
-fn run(
-    window: &mut RenderWindow,
-    pixels: &[[RectangleShape; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize],
-    vm_interface: Arc<Mutex<VMInterface>>,
-) {
+fn run(internals: &mut VisualizerInternals) {
     let mut keys_pressed = [false; 16];
-    while window.is_open() {
+    let mut sound = Sound::with_buffer(&*internals.sound_buffer);
+    sound.set_volume(10.0);
+    sound.set_pitch(100.0);
+
+    while internals.window.is_open() {
         // Handle events
-        while let Some(event) = window.poll_event() {
+        while let Some(event) = internals.window.poll_event() {
             match event {
-                Event::Closed => window.close(),
+                Event::Closed => internals.window.close(),
                 Event::KeyPressed { code, .. } => {
                     if let Some((i, _)) = KEYS.iter().enumerate().find(|(i, k)| **k == code) {
                         keys_pressed[i] = true;
@@ -181,7 +200,7 @@ fn run(
 
         // Update keys in VM.
         {
-            let key_down = &mut vm_interface.lock().unwrap().key_down;
+            let key_down = &mut internals.vm_interface.lock().unwrap().key_down;
             *key_down = None;
             for (i, k) in keys_pressed.iter().enumerate() {
                 if *k {
@@ -190,16 +209,23 @@ fn run(
             }
         }
 
+        // Sound
+        if internals.vm_interface.lock().unwrap().sound_timer.0 > 0 {
+            sound.play();
+        }
+
         // Draw
-        window.clear(Color::BLACK);
+        internals.window.clear(Color::BLACK);
         for x in 0..SCREEN_WIDTH {
             for y in 0..SCREEN_HEIGHT {
-                if *vm_interface.lock().unwrap().display.get(x, y) {
-                    window.draw(&pixels[x as usize][y as usize]);
+                if *internals.vm_interface.lock().unwrap().display.get(x, y) {
+                    internals
+                        .window
+                        .draw(&internals.pixels[x as usize][y as usize]);
                 }
             }
         }
-        vm_interface.lock().unwrap().display.frame();
-        window.display()
+        internals.vm_interface.lock().unwrap().display.frame();
+        internals.window.display()
     }
 }

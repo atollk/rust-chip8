@@ -16,15 +16,12 @@ pub fn run_concurrent_vm_until(mut vm: VirtualMachine, stopper: Arc<Mutex<bool>>
             break;
         }
         {
-            let delay_timer = &mut interface.lock().unwrap().delay_timer;
-            if delay_timer.0 > 0 {
-                delay_timer.0 -= 1;
+            let mut guard = interface.lock().unwrap();
+            if guard.delay_timer.0 > 0 {
+                guard.delay_timer.0 -= 1;
             }
-        }
-        {
-            let sound_timer = &mut interface.lock().unwrap().sound_timer;
-            if sound_timer.0 > 0 {
-                sound_timer.0 -= 1;
+            if guard.sound_timer.0 > 0 {
+                guard.sound_timer.0 -= 1;
             }
         }
         thread::sleep(TIMER_INTERVAL);

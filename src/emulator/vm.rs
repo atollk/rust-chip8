@@ -373,7 +373,6 @@ impl VirtualMachine {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::time::Instant;
 
     #[test]
     fn test_vm_new() {

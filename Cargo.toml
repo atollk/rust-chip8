@@ -10,6 +10,7 @@ edition = "2018"
 sfml = "0.15.1"
 rand = "0.7.3"
 arrayvec = "0.5.1"
+lazy_static = "1.4.0"
 
 [lib]
 name = "chip8"

@@ -9,29 +9,12 @@ use sfml::system::{SfBox, Vector2f};
 use sfml::window::{ContextSettings, Event, Style, VideoMode};
 use std::iter;
 use std::{
+    collections::HashMap,
     sync::{Arc, Condvar, Mutex},
     thread::JoinHandle,
 };
 
 const SCALE: usize = 16;
-const KEYS: [sfml::window::Key; 16] = [
-    sfml::window::Key::Num1,
-    sfml::window::Key::Num2,
-    sfml::window::Key::Num3,
-    sfml::window::Key::Q,
-    sfml::window::Key::W,
-    sfml::window::Key::E,
-    sfml::window::Key::A,
-    sfml::window::Key::S,
-    sfml::window::Key::D,
-    sfml::window::Key::X,
-    sfml::window::Key::Y,
-    sfml::window::Key::C,
-    sfml::window::Key::Num4,
-    sfml::window::Key::R,
-    sfml::window::Key::F,
-    sfml::window::Key::V,
-];
 const SOUND_FILENAME: &str = "final-fantasy-viii-sound-effects-cursor-move.ogg";
 
 pub struct Visualizer {
@@ -44,15 +27,20 @@ struct VisualizerInternals<'a> {
     pixels: [[RectangleShape<'a>; SCREEN_HEIGHT as usize]; SCREEN_WIDTH as usize],
     vm_interface: &'a Mutex<VMInterface>,
     sound_buffer: SfBox<SoundBuffer>,
+    keymap: HashMap<u8, sfml::window::Key>,
 }
 
 impl<'a> VisualizerInternals<'a> {
-    fn new(vm_interface: &'a Mutex<VMInterface>) -> VisualizerInternals<'a> {
+    fn new(
+        vm_interface: &'a Mutex<VMInterface>,
+        keymap: HashMap<u8, sfml::window::Key>,
+    ) -> VisualizerInternals<'a> {
         VisualizerInternals {
             window: VisualizerInternals::init_window(),
             pixels: VisualizerInternals::init_pixels(),
             vm_interface,
             sound_buffer: SoundBuffer::from_file(SOUND_FILENAME).unwrap(),
+            keymap,
         }
     }
 
@@ -96,12 +84,16 @@ impl<'a> VisualizerInternals<'a> {
 }
 
 impl Visualizer {
-    pub fn new(vm_interface: Arc<Mutex<VMInterface>>) -> Visualizer {
+    pub fn new(
+        vm_interface: Arc<Mutex<VMInterface>>,
+        display_fade: u32,
+        keymap: HashMap<u8, sfml::window::Key>,
+    ) -> Visualizer {
         let setup_done = Arc::new((Mutex::new(false), Condvar::new()));
         let setup_done2 = setup_done.clone();
         let join_handle = std::thread::spawn(move || {
-            vm_interface.lock().unwrap().display = Box::new(FadeDisplay::new(10));
-            let mut internals = VisualizerInternals::new(&*vm_interface);
+            vm_interface.lock().unwrap().display = Box::new(FadeDisplay::new(display_fade));
+            let mut internals = VisualizerInternals::new(&*vm_interface, keymap);
             {
                 let (mutex, condvar) = &*setup_done2;
                 *mutex.lock().unwrap() = true;
@@ -197,20 +189,28 @@ fn run(internals: &mut VisualizerInternals) {
             match event {
                 Event::Closed => internals.window.close(),
                 Event::KeyPressed { code, .. } => {
-                    if let Some((i, _)) = KEYS.iter().enumerate().find(|(i, k)| **k == code) {
-                        keys_pressed[i] = true;
+                    if let Some((i, _)) = internals
+                        .keymap
+                        .iter()
+                        .find(|(_, k)| **k == code)
+                    {
+                        keys_pressed[*i as usize] = true;
                     }
                 }
                 Event::KeyReleased { code, .. } => {
-                    if let Some((i, _)) = KEYS.iter().enumerate().find(|(i, k)| **k == code) {
-                        keys_pressed[i] = false;
+                    if let Some((i, _)) = internals
+                        .keymap
+                        .iter()
+                        .find(|(_, k)| **k == code)
+                    {
+                        keys_pressed[*i as usize] = false;
                     }
                 }
                 _ => { /* do nothing */ }
             }
         }
 
-        // Update keys in VM.
+        // Update keymap in VM.
         {
             let key_down = &mut internals.vm_interface.lock().unwrap().key_down;
             *key_down = None;
@@ -233,9 +233,7 @@ fn run(internals: &mut VisualizerInternals) {
                 let pixel = &mut internals.pixels[x as usize][y as usize];
                 let alpha = internals.vm_interface.lock().unwrap().display.get(x, y);
                 pixel.set_fill_color(Color::rgba(255, 255, 255, alpha));
-                    internals
-                        .window
-                        .draw(pixel);
+                internals.window.draw(pixel);
             }
         }
         internals.vm_interface.lock().unwrap().display.frame();

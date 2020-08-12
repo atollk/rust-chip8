@@ -5,32 +5,50 @@ use std::{
     time::Duration,
 };
 
-const INSTRUCTION_SLEEP: Duration = Duration::from_millis(1);
-const TIMER_INTERVAL: Duration = Duration::from_micros(16667);
+pub struct Executor {
+    instruction_sleep: Duration,
+    timer_interval: Duration,
+    vm: VirtualMachine,
+}
 
-pub fn run_concurrent_vm_until(mut vm: VirtualMachine, stopper: Arc<Mutex<bool>>) {
-    let interface = vm.interface.clone();
-    let stopper2 = stopper.clone();
-    thread::spawn(move || loop {
-        if *stopper.lock().unwrap() {
-            break;
+impl Executor {
+    pub fn new(
+        instruction_sleep: Duration,
+        timer_interval: Duration,
+        vm: VirtualMachine,
+    ) -> Executor {
+        Executor {
+            instruction_sleep,
+            timer_interval,
+            vm,
         }
-        {
-            let mut guard = interface.lock().unwrap();
-            if guard.delay_timer.0 > 0 {
-                guard.delay_timer.0 -= 1;
+    }
+
+    pub fn run_concurrent_until(mut self, stopper: Arc<Mutex<bool>>) {
+        let interface = self.vm.interface.clone();
+        let stopper2 = stopper.clone();
+        let timer_interval = self.timer_interval;
+        thread::spawn(move || loop {
+            if *stopper.lock().unwrap() {
+                break;
             }
-            if guard.sound_timer.0 > 0 {
-                guard.sound_timer.0 -= 1;
+            {
+                let mut guard = interface.lock().unwrap();
+                if guard.delay_timer.0 > 0 {
+                    guard.delay_timer.0 -= 1;
+                }
+                if guard.sound_timer.0 > 0 {
+                    guard.sound_timer.0 -= 1;
+                }
             }
-        }
-        thread::sleep(TIMER_INTERVAL);
-    });
-    thread::spawn(move || loop {
-        if *stopper2.lock().unwrap() {
-            break;
-        }
-        vm.step();
-        thread::sleep(INSTRUCTION_SLEEP);
-    });
+            thread::sleep(timer_interval);
+        });
+        thread::spawn(move || loop {
+            if *stopper2.lock().unwrap() {
+                break;
+            }
+            self.vm.step();
+            thread::sleep(self.instruction_sleep);
+        });
+    }
 }
